@@ -1680,39 +1680,45 @@ def transcribe_with_connector(app_context, recording_id, filepath, original_file
                             current_app.logger.info(f"Chunked transcription completed: {len(transcription_text)} characters")
                     else:
                         # Build the transcription request for single file
-                        with open(actual_filepath, 'rb') as audio_file:
+                        # 注意：文件对象需要在connector.transcribe()调用期间保持打开状态
+                        # 对于某些连接器（如OpenAI Whisper），文件对象在API调用期间需要保持打开
+                        audio_file = open(actual_filepath, 'rb')
+                        try:
                             # Check if recording has bucket URLs - enhanced monitoring
                             file_urls = None
                             bucket_urls_status = "none"
                             if recording:
-                                if recording.bucket_urls:
-                                    file_urls = recording.bucket_urls
-                                    bucket_urls_status = "available"
-                                    
-                                    # 检查bucket URLs是否过期，如果需要则重新上传
-                                    try:
-                                        # 导入ensure_valid_bucket_urls函数
-                                        from src.api.recordings import ensure_valid_bucket_urls
-                                        success, updated_urls = ensure_valid_bucket_urls(recording)
-                                        if success and updated_urls:
-                                            file_urls = updated_urls
-                                            current_app.logger.info(f"BUCKET_URLS_MONITOR: Recording {recording_id} bucket URLs validated/refreshed, using updated URLs")
-                                        elif not success:
-                                            current_app.logger.warning(f"BUCKET_URLS_MONITOR: Recording {recording_id} bucket URL validation failed, using original URLs")
-                                    except Exception as e:
-                                        current_app.logger.warning(f"BUCKET_URLS_MONITOR: Failed to validate bucket URLs for recording {recording_id}: {e}")
-                                    
-                                    # Enhanced logging for bucket URLs monitoring
-                                    if isinstance(file_urls, list):
-                                        url_count = len(file_urls)
-                                        first_url_preview = file_urls[0][:100] + "..." if len(file_urls[0]) > 100 else file_urls[0]
-                                        current_app.logger.info(f"BUCKET_URLS_MONITOR: Recording {recording_id} has {url_count} bucket URL(s). First URL preview: {first_url_preview}")
-                                        current_app.logger.debug(f"BUCKET_URLS_MONITOR: Full bucket URLs for recording {recording_id}: {file_urls}")
+                                # 无论recording.bucket_urls是否为空，都调用ensure_valid_bucket_urls函数
+                                # 这个函数会处理bucket_urls为空的情况，自动上传文件到bucket
+                                try:
+                                    # 导入ensure_valid_bucket_urls函数
+                                    from src.api.recordings import ensure_valid_bucket_urls
+                                    success, updated_urls = ensure_valid_bucket_urls(recording)
+                                    if success and updated_urls:
+                                        file_urls = updated_urls
+                                        bucket_urls_status = "available"
+                                        current_app.logger.info(f"BUCKET_URLS_MONITOR: Recording {recording_id} bucket URLs validated/refreshed, using updated URLs")
+                                    elif success and not updated_urls:
+                                        # 成功但没有URLs（可能是ENABLE_UPLOAD_BUCKET为false）
+                                        bucket_urls_status = "disabled"
+                                        current_app.logger.info(f"BUCKET_URLS_MONITOR: Recording {recording_id} bucket upload disabled or not needed")
                                     else:
-                                        current_app.logger.warning(f"BUCKET_URLS_MONITOR: Recording {recording_id} has bucket_urls but it's not a list: {type(file_urls)}")
+                                        bucket_urls_status = "failed"
+                                        current_app.logger.warning(f"BUCKET_URLS_MONITOR: Recording {recording_id} bucket URL validation failed")
+                                except Exception as e:
+                                    bucket_urls_status = "error"
+                                    current_app.logger.warning(f"BUCKET_URLS_MONITOR: Failed to validate bucket URLs for recording {recording_id}: {e}")
+                                
+                                # Enhanced logging for bucket URLs monitoring
+                                if isinstance(file_urls, list):
+                                    url_count = len(file_urls)
+                                    first_url_preview = file_urls[0][:100] + "..." if len(file_urls[0]) > 100 else file_urls[0]
+                                    current_app.logger.info(f"BUCKET_URLS_MONITOR: Recording {recording_id} has {url_count} bucket URL(s). First URL preview: {first_url_preview}")
+                                    current_app.logger.debug(f"BUCKET_URLS_MONITOR: Full bucket URLs for recording {recording_id}: {file_urls}")
+                                elif file_urls is None:
+                                    current_app.logger.info(f"BUCKET_URLS_MONITOR: Recording {recording_id} has no bucket URLs (file_urls is None)")
                                 else:
-                                    bucket_urls_status = "null"
-                                    current_app.logger.info(f"BUCKET_URLS_MONITOR: Recording {recording_id} has no bucket URLs (field is null)")
+                                    current_app.logger.warning(f"BUCKET_URLS_MONITOR: Recording {recording_id} has bucket_urls but it's not a list: {type(file_urls)}")
                             else:
                                 bucket_urls_status = "no_recording"
                                 current_app.logger.error(f"BUCKET_URLS_MONITOR: Recording {recording_id} not found in database")
@@ -1734,7 +1740,68 @@ def transcribe_with_connector(app_context, recording_id, filepath, original_file
                             )
 
                             current_app.logger.info(f"Transcribing with connector: diarize={should_diarize}, language={language}, file_urls={file_urls is not None}")
-                            response = connector.transcribe(request)
+                            try:
+                                response = connector.transcribe(request)
+                            finally:
+                                # 确保文件在transcribe调用后关闭
+                                audio_file.close()
+                        except Exception as e:
+                            # 特殊处理阿里云FunASR的SUCCESS_WITH_NO_VALID_FRAGMENT错误
+                            error_msg = str(e)
+                            if 'SUCCESS_WITH_NO_VALID_FRAGMENT' in error_msg and connector_name == 'alibaba_funasr':
+                                current_app.logger.warning(f"阿里云FunASR返回SUCCESS_WITH_NO_VALID_FRAGMENT错误，尝试使用其他连接器...")
+                                
+                                # 尝试使用其他连接器
+                                from src.services.transcription.registry import get_registry
+                                registry = get_registry()
+                                
+                                # 获取所有可用的连接器
+                                all_connectors = registry.list_connectors()
+                                available_connectors = [c['name'] for c in all_connectors if c['name'] != 'alibaba_funasr']
+                                
+                                if available_connectors:
+                                    current_app.logger.info(f"可用的备用连接器: {available_connectors}")
+                                    
+                                    # 尝试每个备用连接器
+                                    for backup_connector_name in available_connectors:
+                                        try:
+                                            current_app.logger.info(f"尝试使用备用连接器: {backup_connector_name}")
+                                            
+                                            # 创建备用连接器
+                                            backup_config = registry._build_config_from_env(backup_connector_name)
+                                            backup_connector = registry.create_connector(backup_connector_name, backup_config)
+                                            
+                                            # 重新打开文件并转录
+                                            with open(actual_filepath, 'rb') as audio_file:
+                                                backup_request = TranscriptionRequest(
+                                                    audio_file=audio_file,
+                                                    filename=actual_filename,
+                                                    mime_type=actual_content_type,
+                                                    language=language,
+                                                    file_urls=file_urls,
+                                                    diarize=should_diarize,
+                                                    min_speakers=min_speakers,
+                                                    max_speakers=max_speakers,
+                                                    prompt=initial_prompt,
+                                                    hotwords=hotwords,
+                                                )
+                                                
+                                                response = backup_connector.transcribe(backup_request)
+                                                current_app.logger.info(f"备用连接器 {backup_connector_name} 转录成功")
+                                                break  # 成功，跳出循环
+                                                
+                                        except Exception as backup_error:
+                                            current_app.logger.warning(f"备用连接器 {backup_connector_name} 失败: {backup_error}")
+                                            continue  # 尝试下一个连接器
+                                    
+                                    # 检查是否有连接器成功
+                                    if 'response' not in locals() or response is None:
+                                        raise TranscriptionError(f"所有备用连接器都失败了，无法完成转录")
+                                else:
+                                    raise TranscriptionError(f"没有可用的备用连接器")
+                            else:
+                                # 其他错误，直接抛出
+                                raise
 
                         # Store the result
                         if response.segments and response.has_diarization():

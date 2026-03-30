@@ -58,26 +58,55 @@ class AlibabaFunASRConnector(BaseTranscriptionConnector):
                 - timestamp_alignment_enabled: 时间戳校准功能 (default: False)
                 - language_hints: 语言提示数组 (default: [])
         """
-        super().__init__(config)
-
-        self.base_url = config['base_url'].rstrip('/')
-        self.api_key = config.get('api_key', '')
-        self.model = config.get('model', 'fun-asr')
+        # 优先使用新的环境变量，如果未设置则使用配置中的值
+        base_url = config.get('base_url', '')
+        api_key = config.get('api_key', '')
+        model = config.get('model', 'fun-asr')
+        
+        # 检查新的环境变量
+        if not base_url:
+            base_url = os.environ.get('FUNASR_BASE_URL', '')
+            if base_url:
+                logger.info(f"使用FUNASR_BASE_URL环境变量: {base_url}")
+        
+        if not api_key:
+            api_key = os.environ.get('FUNASR_API_KEY', '')
+            if api_key:
+                logger.info(f"使用FUNASR_API_KEY环境变量")
+        
+        # 检查FUNASR_MODEL环境变量
+        funasr_model = os.environ.get('FUNASR_MODEL', '')
+        if funasr_model:
+            model = funasr_model
+            logger.info(f"使用FUNASR_MODEL环境变量: {model}")
+        
+        self.base_url = base_url.rstrip('/') if base_url else ''
+        self.api_key = api_key
+        self.model = model
         self._config_timeout = config.get('timeout', 1800)
         self.default_diarize = config.get('diarize', True)
         self.disfluency_removal_enabled = config.get('disfluency_removal_enabled', True)
         self.timestamp_alignment_enabled = config.get('timestamp_alignment_enabled', False)
         self.language_hints = config.get('language_hints', [])
 
-        # 验证配置
-        self._validate_config()
+        # 调用父类初始化，这会调用_validate_config
+        super().__init__(config)
 
     def _validate_config(self) -> None:
         """验证配置"""
-        if not self.config.get('base_url'):
-            raise ConfigurationError("base_url is required for Alibaba FunASR connector")
-        if not self.config.get('api_key'):
-            raise ConfigurationError("api_key is required for Alibaba FunASR connector")
+        # 最终验证
+        if not self.base_url:
+            raise ConfigurationError(
+                "base_url is required for Alibaba FunASR connector. "
+                "Set FUNASR_BASE_URL or ASR_BASE_URL environment variable, "
+                "or provide base_url in config."
+            )
+        if not self.api_key:
+            raise ConfigurationError(
+                "api_key is required for Alibaba FunASR connector. "
+                "Set FUNASR_API_KEY or TRANSCRIPTION_API_KEY environment variable, "
+                "or provide api_key in config."
+            )
 
     @property
     def timeout(self):
@@ -176,6 +205,20 @@ class AlibabaFunASRConnector(BaseTranscriptionConnector):
                                 "3. 音频格式是否正确（推荐WAV格式，16kHz采样率，单声道）\n"
                                 "4. 尝试使用阿里云官方示例音频测试"
                             )
+                        
+                        # 特殊处理SUCCESS_WITH_NO_VALID_FRAGMENT错误
+                        # 这个错误代码表示任务成功但没有有效的音频片段
+                        # 应该返回空结果而不是抛出错误
+                        if error_code == 'SUCCESS_WITH_NO_VALID_FRAGMENT':
+                            logger.warning(f"阿里云FunASR任务成功但没有有效的音频片段: {error_msg}")
+                            # 返回一个空的成功响应
+                            return {
+                                'output': {
+                                    'task_status': 'SUCCEEDED',
+                                    'results': [],
+                                    'message': error_msg
+                                }
+                            }
                         
                         raise ProviderError(
                             f"阿里云FunASR任务失败: {error_msg} (错误代码: {error_code})",
@@ -416,265 +459,165 @@ class AlibabaFunASRConnector(BaseTranscriptionConnector):
                 response.raise_for_status()
                 
                 result_data = response.json()
-                logger.info(f"转录结果下载成功，包含键: {list(result_data.keys())}")
-                
+                logger.info(f"成功下载转录结果，数据大小: {len(str(result_data))} 字符")
                 return result_data
                 
+        except httpx.HTTPStatusError as e:
+            logger.error(f"下载转录结果失败，状态码: {e.response.status_code}")
+            raise ProviderError(
+                f"下载转录结果失败，状态码: {e.response.status_code}",
+                provider=self.PROVIDER_NAME,
+                status_code=e.response.status_code
+            ) from e
         except Exception as e:
-            logger.error(f"下载转录结果失败: {e}")
-            raise TranscriptionError(f"下载转录结果失败: {e}")
+            logger.error(f"下载转录结果异常: {e}")
+            raise TranscriptionError(f"下载转录结果失败: {e}") from e
 
     def _parse_response(self, data: Dict[str, Any]) -> TranscriptionResponse:
         """
-        解析阿里云FunASR响应为标准化格式
-
+        解析阿里云FunASR响应
+        
         Args:
-            data: 阿里云FunASR响应数据
-
+            data: 阿里云FunASR返回的JSON数据
+            
         Returns:
-            标准化的转录响应
+            标准化的TranscriptionResponse
         """
-        logger.info(f"阿里云FunASR响应键: {list(data.keys())}")
-        
-        # 阿里云FunASR的响应结构
-        output = data.get('output', {})
-        
-        # 检查是否有错误
-        task_status = output.get('task_status')
-        if task_status == 'FAILED':
-            error_msg = output.get('message', '任务失败')
-            raise ProviderError(
-                f"阿里云FunASR任务失败: {error_msg}",
-                provider=self.PROVIDER_NAME
-            )
-        
-        # 根据官方示例，结果可能在results字段中
-        results = output.get('results', [])
-        
-        # 如果没有results字段，尝试result字段（旧格式）
-        if not results and 'result' in output:
-            # 旧格式：单个结果
-            result = output.get('result', {})
-            results = [result]
-        
-        segments = []
-        speakers = set()
-        full_text_parts = []
-        
-        # 处理所有结果
-        for result_idx, result in enumerate(results):
-            # 检查子任务状态
-            subtask_status = result.get('subtask_status')
-            if subtask_status == 'FAILED':
-                error_code = result.get('code', 'UNKNOWN_ERROR')
-                error_msg = result.get('message', '子任务失败')
-                logger.warning(f"子任务 {result_idx} 失败: {error_code} - {error_msg}")
-                continue
+        try:
+            output = data.get('output', {})
+            task_status = output.get('task_status', 'UNKNOWN')
             
-            # 获取转录文本
-            text = result.get('text', '')
-            
-            # 如果有transcription_url，下载转录结果
-            transcription_url = result.get('transcription_url')
-            if transcription_url:
-                logger.info(f"子任务 {result_idx} 有转录URL: {transcription_url[:100]}...")
+            # 检查任务状态
+            if task_status != 'SUCCEEDED':
+                error_code = output.get('code', 'UNKNOWN_ERROR')
+                error_msg = output.get('message', '任务失败')
                 
-                try:
-                    # 下载转录结果
-                    transcription_data = self._download_transcription_result(transcription_url)
-                    
-                    # 解析转录数据
-                    transcripts = transcription_data.get('transcripts', [])
-                    
-                    for transcript in transcripts:
-                        # 获取文本
-                        transcript_text = transcript.get('text', '')
-                        if transcript_text:
-                            text = transcript_text
-                        
-                        # 解析句子
-                        transcript_sentences = transcript.get('sentences', [])
-                        
-                        for sentence in transcript_sentences:
-                            sentence_text = sentence.get('text', '').strip()
-                            if not sentence_text:
-                                continue
-                            
-                            # 获取说话人ID
-                            speaker_id = sentence.get('speaker_id', 0)
-                            speaker = f'SPEAKER_{speaker_id:02d}'
-                            
-                            # 时间戳（毫秒转换为秒）
-                            begin_time = sentence.get('begin_time', 0)
-                            end_time = sentence.get('end_time', 0)
-                            start_time = begin_time / 1000.0 if begin_time else 0
-                            end_time = end_time / 1000.0 if end_time else 0
-                            
-                            speakers.add(speaker)
-                            full_text_parts.append(f"[{speaker}]: {sentence_text}")
-                            
-                            segments.append(TranscriptionSegment(
-                                text=sentence_text,
-                                speaker=speaker,
-                                start_time=start_time,
-                                end_time=end_time
-                            ))
-                    
-                except Exception as e:
-                    logger.error(f"下载或解析转录结果失败: {e}")
-                    # 继续处理其他结果
+                # 特殊处理SUCCESS_WITH_NO_VALID_FRAGMENT错误
+                if error_code == 'SUCCESS_WITH_NO_VALID_FRAGMENT':
+                    logger.warning(f"阿里云FunASR任务成功但没有有效的音频片段: {error_msg}")
+                    # 返回空的转录结果
+                    return TranscriptionResponse(
+                        text='',
+                        segments=[],
+                        speakers=[],
+                        language=None,
+                        provider=self.PROVIDER_NAME,
+                        model=self.model,
+                        raw_response=data
+                    )
+                
+                # 其他错误应该已经在_poll_task_result中处理了
+                raise ProviderError(
+                    f"阿里云FunASR任务失败: {error_msg} (错误代码: {error_code})",
+                    provider=self.PROVIDER_NAME,
+                    status_code=200  # 阿里云返回200状态码但任务失败
+                )
             
-            # 如果没有从转录URL获取到数据，尝试直接解析结果
-            if not segments and text:
-                # 只有完整文本，没有分段
-                segments.append(TranscriptionSegment(
-                    text=text,
-                    speaker='SPEAKER_00',
-                    start_time=0,
-                    end_time=None
-                ))
-                speakers.add('SPEAKER_00')
-                full_text_parts.append(f"[SPEAKER_00]: {text}")
+            # 解析成功的结果
+            results = output.get('results', [])
+            segments = []
+            speakers = set()
+            full_text_parts = []
             
-            # 解析句子（如果直接返回在结果中）
-            sentences = result.get('sentences', [])
-            if sentences and not segments:  # 只有在没有从转录URL获取数据时才使用
-                # 有句子级别的分段
-                for i, sentence in enumerate(sentences):
-                    # 阿里云FunASR的说话人标签格式
-                    speaker = sentence.get('spk', f'SPEAKER_{i:02d}')
-                    
-                    # 处理文本
-                    sentence_text = sentence.get('text', '').strip()
-                    if not sentence_text:
+            logger.info(f"解析阿里云FunASR响应，结果数量: {len(results)}")
+            
+            for result in results:
+                # 阿里云FunASR返回的格式可能包含多个句子
+                sentences = result.get('sentences', [])
+                
+                for sentence in sentences:
+                    text = sentence.get('text', '').strip()
+                    if not text:
                         continue
-                        
-                    # 时间戳
-                    start_time = sentence.get('start_time', 0)
-                    end_time = sentence.get('end_time', 0)
                     
-                    speakers.add(speaker)
-                    full_text_parts.append(f"[{speaker}]: {sentence_text}")
+                    # 获取说话人信息
+                    speaker = sentence.get('speaker', 'SPEAKER_0')
                     
-                    segments.append(TranscriptionSegment(
-                        text=sentence_text,
-                        speaker=speaker,
+                    # 标准化说话人格式
+                    if speaker.startswith('SPEAKER_'):
+                        speaker_id = speaker
+                    else:
+                        # 尝试提取说话人ID
+                        try:
+                            speaker_id = f"SPEAKER_{int(speaker)}"
+                        except (ValueError, TypeError):
+                            speaker_id = f"SPEAKER_{speaker}"
+                    
+                    # 获取时间戳
+                    start_time = sentence.get('start_time', 0.0)
+                    end_time = sentence.get('end_time', 0.0)
+                    
+                    # 确保时间戳是浮点数
+                    try:
+                        start_time = float(start_time)
+                    except (ValueError, TypeError):
+                        start_time = 0.0
+                    
+                    try:
+                        end_time = float(end_time)
+                    except (ValueError, TypeError):
+                        end_time = 0.0
+                    
+                    # 创建分段
+                    segment = TranscriptionSegment(
+                        text=text,
+                        speaker=speaker_id,
                         start_time=start_time,
                         end_time=end_time
-                    ))
-        
-        # 如果没有解析到任何内容
-        if not segments:
-            # 尝试从output中获取文本
-            if 'result' in output:
-                result = output['result']
-                text = result.get('text', '')
-                if text:
-                    segments.append(TranscriptionSegment(
-                        text=text,
-                        speaker='SPEAKER_00',
-                        start_time=0,
-                        end_time=None
-                    ))
-                    speakers.add('SPEAKER_00')
-                    full_text_parts.append(f"[SPEAKER_00]: {text}")
-                else:
-                    # 未知格式
-                    logger.warning(f"未知的阿里云FunASR响应格式: {data}")
-                    full_text = json.dumps(data)
-                    segments.append(TranscriptionSegment(
-                        text=full_text,
-                        speaker='SPEAKER_00',
-                        start_time=0,
-                        end_time=None
-                    ))
-                    speakers.add('SPEAKER_00')
-                    full_text_parts.append(f"[SPEAKER_00]: {full_text}")
-        
-        # 获取完整文本
-        if full_text_parts:
-            full_text = '\n'.join(full_text_parts)
-        else:
-            full_text = ''
-        
-        # 获取语言 - 尝试从第一个结果中获取
-        language = 'zh-CN'  # 默认值
-        if results and len(results) > 0:
-            language = results[0].get('language', 'zh-CN')
-        elif 'result' in output:
-            language = output['result'].get('language', 'zh-CN')
-        
-        logger.info(f"解析了 {len(segments)} 个分段，包含 {len(speakers)} 个不同的说话人: {sorted(speakers)}")
-        
-        return TranscriptionResponse(
-            text=full_text,
-            segments=segments,
-            speakers=sorted(list(speakers)),
-            speaker_embeddings=None,  # 阿里云FunASR不支持说话人嵌入
-            language=language,
-            provider=self.PROVIDER_NAME,
-            model=self.model,
-            raw_response=data
-        )
-
-    def health_check(self) -> bool:
-        """检查阿里云FunASR服务是否可达"""
-        try:
-            headers = {
-                'Authorization': f'Bearer {self.api_key}',
-                'Content-Type': 'application/json'
-            }
+                    )
+                    
+                    segments.append(segment)
+                    speakers.add(speaker_id)
+                    full_text_parts.append(f"[{speaker_id}]: {text}")
             
-            with httpx.Client(timeout=10.0) as client:
-                # 尝试健康检查端点
-                health_url = f"{self.base_url}/health"
-                try:
-                    response = client.get(health_url, headers=headers)
-                    if response.status_code < 500:
-                        return True
-                except Exception:
-                    pass
-                
-                # 尝试基础端点
-                try:
-                    response = client.get(self.base_url, headers=headers)
-                    if response.status_code < 500:
-                        return True
-                except Exception:
-                    pass
-                
-                # 尝试服务端点
-                try:
-                    service_url = f"{self.base_url}/services/audio/asr/transcription"
-                    response = client.get(service_url, headers=headers)
-                    if response.status_code < 500:
-                        return True
-                except Exception:
-                    pass
-                
-                return False
-        except Exception:
-            return False
+            # 构建完整文本
+            if full_text_parts:
+                full_text = '\n'.join(full_text_parts)
+            else:
+                full_text = ''
+            
+            # 获取语言信息
+            language = None
+            for result in results:
+                if 'language' in result:
+                    language = result.get('language')
+                    break
+            
+            logger.info(f"解析完成: {len(segments)}个分段, {len(speakers)}个说话人")
+            
+            return TranscriptionResponse(
+                text=full_text,
+                segments=segments,
+                speakers=sorted(list(speakers)),
+                language=language,
+                provider=self.PROVIDER_NAME,
+                model=self.model,
+                raw_response=data
+            )
+            
+        except Exception as e:
+            logger.error(f"解析阿里云FunASR响应失败: {e}")
+            raise TranscriptionError(f"解析阿里云FunASR响应失败: {e}") from e
 
     @classmethod
     def get_config_schema(cls) -> Dict[str, Any]:
-        """返回配置的JSON模式"""
+        """返回配置的JSON Schema"""
         return {
             "type": "object",
             "required": ["base_url", "api_key"],
             "properties": {
                 "base_url": {
                     "type": "string",
-                    "description": "阿里云FunASR基础URL (e.g., https://dashscope.aliyuncs.com/api/v1)"
+                    "description": "阿里云FunASR基础URL (例如: https://dashscope.aliyuncs.com/api/v1)"
                 },
                 "api_key": {
                     "type": "string",
-                    "description": "阿里云API密钥"
+                    "description": "阿里云FunASR API密钥"
                 },
                 "model": {
                     "type": "string",
                     "default": "fun-asr",
-                    "description": "FunASR模型名称"
+                    "description": "模型名称"
                 },
                 "timeout": {
                     "type": "integer",
@@ -684,23 +627,21 @@ class AlibabaFunASRConnector(BaseTranscriptionConnector):
                 "diarize": {
                     "type": "boolean",
                     "default": True,
-                    "description": "启用说话人分离"
+                    "description": "是否启用说话人分离"
                 },
                 "disfluency_removal_enabled": {
                     "type": "boolean",
                     "default": True,
-                    "description": "过滤语气词"
+                    "description": "是否过滤语气词"
                 },
                 "timestamp_alignment_enabled": {
                     "type": "boolean",
                     "default": False,
-                    "description": "启用时间戳校准功能"
+                    "description": "是否启用时间戳校准功能"
                 },
                 "language_hints": {
                     "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
+                    "items": {"type": "string"},
                     "default": [],
                     "description": "语言提示数组"
                 }

@@ -9,15 +9,24 @@ Modify your docker compose Environment.
 # ===================================
 
 # API Endpoint Configuration
-ASR_BASE_URL=https://dashscope.aliyuncs.com/api/v1
+FUNASR_BASE_URL=https://dashscope.aliyuncs.com/api/v1
 
 # Authentication & API Key
-TRANSCRIPTION_API_KEY=sk-YOUR_ALIYUN_API_KEY  # Replace with your actual API key from Aliyun Console
+FUNASR_API_KEY=YOUR_ALIYUN_API_KEY  # Replace with your actual API key from Aliyun Console
 
 # ASR Model Selection
 # Supported models: 'fun-asr' or 'paraformer-v2'
 # Recommendation: paraformer-v2 (cost-effective with comparable accuracy)
-TRANSCRIPTION_MODEL=  # Uncomment and specify your preferred model
+FUNASR_MODEL=paraformer-v2  # Uncomment and specify your preferred model
+
+#Funasr Optional Parameters
+# ASR_TIMEOUT=1800 # Transcription timeout in seconds, default 30 minutes.
+# ASR_DIARIZE=true # Enable speaker diarization, default enabled.
+# ASR_MIN_SPEAKERS # Minimum speaker count hint, default none.
+# ASR_MAX_SPEAKERS # Maximum speaker count hint, default none.
+# ASR_DISFLUENCY_REMOVAL_ENABLED=true # Enable filler-word removal, default enabled.
+# ASR_TIMESTAMP_ALIGNMENT_ENABLED=false # Enable timestamp alignment, default disabled.
+# ASR_LANGUAGE_HINTS=zh,en,ja,yue,ko,de,fr,ru # Recognition language hints, default empty; determined by mode.
 
 # Bucket Configuration (Support Any S3 bucket services)
 ENABLE_UPLOAD_BUCKET=true  # Enable/disable bucket upload feature
@@ -30,6 +39,8 @@ BUCKET_REGION=           # Bucket region (e.g., cn-hangzhou)
 BUCKET_NAME=             # Bucket bucket name
 BUCKET_PATH=             # Storage path prefix (without leading '/')
 ```
+### When Fun-ASR recognition fails, the system will automatically fall back to the default connector for processing.
+
 ## Logic Flowchat:
 ```mermaid
   graph TD

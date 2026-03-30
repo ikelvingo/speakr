@@ -76,7 +76,7 @@ def ensure_valid_bucket_urls(recording):
     返回:
         tuple: (bool, list) - (是否成功, 更新后的bucket URLs列表)
     """
-    if not recording.bucket_urls or not ENABLE_UPLOAD_BUCKET:
+    if not ENABLE_UPLOAD_BUCKET:
         return True, recording.bucket_urls or []
     
     try:
@@ -98,8 +98,58 @@ def ensure_valid_bucket_urls(recording):
         
         # 检查是否有有效的音频文件路径
         if not recording.audio_path or not os.path.exists(recording.audio_path):
-            current_app.logger.warning(f"Audio file not found for recording {recording.id}, cannot re-upload to bucket")
+            current_app.logger.warning(f"Audio file not found for recording {recording.id}, cannot upload to bucket")
             return False, bucket_urls
+        
+        # 如果bucket_urls为空，需要上传文件到bucket
+        if not bucket_urls:
+            current_app.logger.info(f"Recording {recording.id} has no bucket URLs, uploading file to bucket")
+            
+            # 创建S3客户端
+            s3_client = boto3.client(
+                's3',
+                endpoint_url=BUCKET_ENDPOINT,
+                aws_access_key_id=BUCKET_ACCESS_ID,
+                aws_secret_access_key=BUCKET_ACCESS_KEY,
+                region_name=BUCKET_REGION if BUCKET_REGION else None,
+                config=Config(signature_version='s3v4')
+            )
+            
+            # 生成新的对象key
+            timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+            safe_filename = secure_filename(recording.original_filename or f"recording_{recording.id}")
+            
+            # 清理BUCKET_PATH
+            if BUCKET_PATH:
+                clean_path = BUCKET_PATH.strip('/')
+                object_key = f"{clean_path}/{timestamp}_{safe_filename}" if clean_path else f"{timestamp}_{safe_filename}"
+            else:
+                object_key = f"{timestamp}_{safe_filename}"
+            
+            # 上传文件到bucket
+            s3_client.upload_file(
+                recording.audio_path,
+                BUCKET_NAME,
+                object_key,
+                ExtraArgs={'ContentType': recording.mime_type or 'application/octet-stream'}
+            )
+            
+            # 生成新的预签名URL
+            new_bucket_url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': BUCKET_NAME,
+                    'Key': object_key
+                },
+                ExpiresIn=3600  # 1小时有效期
+            )
+            
+            # 更新录音的bucket URLs
+            recording.bucket_urls = [new_bucket_url]
+            db.session.commit()
+            
+            current_app.logger.info(f"Successfully uploaded recording {recording.id} to bucket with new URL")
+            return True, [new_bucket_url]
         
         # 检查URL是否过期
         needs_reupload = False

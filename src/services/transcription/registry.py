@@ -306,6 +306,16 @@ class ConnectorRegistry:
             # 统一使用 TRANSCRIPTION_API_KEY 环境变量
             api_key = os.environ.get('TRANSCRIPTION_API_KEY', '')
 
+            # 模型优先级：FUNASR_MODEL > TRANSCRIPTION_MODEL > 默认值
+            model = 'fun-asr'
+            funasr_model = os.environ.get('FUNASR_MODEL', '')
+            if funasr_model:
+                model = funasr_model
+            else:
+                transcription_model = os.environ.get('TRANSCRIPTION_MODEL', '')
+                if transcription_model:
+                    model = transcription_model
+
             # 解析语言提示数组（逗号分隔的字符串）
             language_hints_str = os.environ.get('ASR_LANGUAGE_HINTS', '')
             language_hints = []
@@ -316,7 +326,7 @@ class ConnectorRegistry:
             return {
                 'base_url': base_url,
                 'api_key': api_key,
-                'model': os.environ.get('TRANSCRIPTION_MODEL', 'fun-asr'),
+                'model': model,
                 'timeout': self._get_asr_timeout(),
                 'diarize': os.environ.get('ASR_DIARIZE', 'true').lower() == 'true',
                 'disfluency_removal_enabled': os.environ.get('ASR_DISFLUENCY_REMOVAL_ENABLED', 'true').lower() == 'true',
