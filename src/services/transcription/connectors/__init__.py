@@ -8,12 +8,15 @@ from .asr_endpoint import ASREndpointConnector
 from .azure_openai_transcribe import AzureOpenAITranscribeConnector
 from .mistral import MistralTranscriptionConnector
 from .vibevoice import VibeVoiceTranscriptionConnector
+from .alibaba_funasr import AlibabaFunASRConnector
 
 __all__ = [
+    'OpenAIWhisperConnector',
     'OpenAIWhisperConnector',
     'OpenAITranscribeConnector',
     'ASREndpointConnector',
     'AzureOpenAITranscribeConnector',
     'MistralTranscriptionConnector',
     'VibeVoiceTranscriptionConnector',
+    'AlibabaFunASRConnector',
 ]

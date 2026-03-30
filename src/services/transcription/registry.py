@@ -47,6 +47,7 @@ class ConnectorRegistry:
         from .connectors.azure_openai_transcribe import AzureOpenAITranscribeConnector
         from .connectors.mistral import MistralTranscriptionConnector
         from .connectors.vibevoice import VibeVoiceTranscriptionConnector
+        from .connectors.alibaba_funasr import AlibabaFunASRConnector
 
         self.register('openai_whisper', OpenAIWhisperConnector)
         self.register('openai_transcribe', OpenAITranscribeConnector)
@@ -54,6 +55,7 @@ class ConnectorRegistry:
         self.register('azure_openai_transcribe', AzureOpenAITranscribeConnector)
         self.register('mistral', MistralTranscriptionConnector)
         self.register('vibevoice', VibeVoiceTranscriptionConnector)
+        self.register('alibaba_funasr', AlibabaFunASRConnector)
 
     def register(self, name: str, connector_class: Type[BaseTranscriptionConnector]):
         """
@@ -122,11 +124,12 @@ class ConnectorRegistry:
 
         Auto-detection priority:
         1. TRANSCRIPTION_CONNECTOR - explicit connector name
-        2. ASR_BASE_URL is set - use ASR endpoint (smarter detection)
+        2. ASR_BASE_URL contains 'dashscope.aliyuncs.com' AND ENABLE_UPLOAD_BUCKET=true - use Alibaba FunASR
+        3. ASR_BASE_URL is set - use ASR endpoint (smarter detection)
            - USE_ASR_ENDPOINT=true also works (backwards compat, with deprecation warning)
-        3. TRANSCRIPTION_MODEL contains 'gpt-4o' - use OpenAI Transcribe
-        4. TRANSCRIPTION_MODEL is set - use OpenAI Whisper with that model
-        5. Default to OpenAI Whisper (whisper-1)
+        4. TRANSCRIPTION_MODEL contains 'gpt-4o' - use OpenAI Transcribe
+        5. TRANSCRIPTION_MODEL is set - use OpenAI Whisper with that model
+        6. Default to OpenAI Whisper (whisper-1)
 
         Returns:
             The initialized connector
@@ -139,6 +142,7 @@ class ConnectorRegistry:
             use_asr_flag = os.environ.get('USE_ASR_ENDPOINT', 'false').lower() == 'true'
             transcription_model = os.environ.get('TRANSCRIPTION_MODEL', '').lower()
             whisper_model = os.environ.get('WHISPER_MODEL', '').lower()
+            enable_upload_bucket = os.environ.get('ENABLE_UPLOAD_BUCKET', 'false').lower() == 'true'
 
             # Deprecation warning for legacy USE_ASR_ENDPOINT flag
             if use_asr_flag:
@@ -147,20 +151,25 @@ class ConnectorRegistry:
                     "Set ASR_BASE_URL instead for auto-detection, or use TRANSCRIPTION_CONNECTOR=asr_endpoint"
                 )
 
-            # Priority 2: ASR endpoint - check ASR_BASE_URL or legacy flag
-            if asr_base_url or use_asr_flag:
+            # Priority 2: Alibaba FunASR - check if ASR_BASE_URL contains dashscope.aliyuncs.com AND ENABLE_UPLOAD_BUCKET=true
+            # Only use Alibaba FunASR when bucket upload is enabled (requires public URLs)
+            if asr_base_url and 'dashscope.aliyuncs.com' in asr_base_url and enable_upload_bucket:
+                connector_name = 'alibaba_funasr'
+                logger.info("Auto-detected Alibaba FunASR from ASR_BASE_URL (ENABLE_UPLOAD_BUCKET=true)")
+            # Priority 3: ASR endpoint - check ASR_BASE_URL or legacy flag
+            elif asr_base_url or use_asr_flag:
                 connector_name = 'asr_endpoint'
                 if asr_base_url:
                     logger.info("Auto-detected ASR endpoint from ASR_BASE_URL")
-            # Priority 2.5: Azure OpenAI - check for Azure endpoint URL
+            # Priority 3.5: Azure OpenAI - check for Azure endpoint URL
             elif self._is_azure_endpoint():
                 connector_name = 'azure_openai_transcribe'
                 logger.info("Auto-detected Azure OpenAI from TRANSCRIPTION_BASE_URL")
-            # Priority 3: Model-based detection
+            # Priority 4: Model-based detection
             elif transcription_model and 'gpt-4o' in transcription_model:
                 connector_name = 'openai_transcribe'
                 logger.info(f"Auto-detected OpenAI Transcribe from TRANSCRIPTION_MODEL={transcription_model}")
-            # Priority 4 & 5: OpenAI Whisper (with custom or default model)
+            # Priority 5 & 6: OpenAI Whisper (with custom or default model)
             else:
                 connector_name = 'openai_whisper'
                 model = transcription_model or whisper_model or 'whisper-1'
@@ -287,6 +296,32 @@ class ConnectorRegistry:
                 'base_url': base_url,
                 'model': os.environ.get('TRANSCRIPTION_MODEL', 'microsoft/VibeVoice-ASR'),
                 'api_key': os.environ.get('TRANSCRIPTION_API_KEY', ''),
+            }
+
+        elif connector_name == 'alibaba_funasr':
+            base_url = os.environ.get('ASR_BASE_URL', '')
+            if base_url:
+                base_url = base_url.split('#')[0].strip()
+
+            # 统一使用 TRANSCRIPTION_API_KEY 环境变量
+            api_key = os.environ.get('TRANSCRIPTION_API_KEY', '')
+
+            # 解析语言提示数组（逗号分隔的字符串）
+            language_hints_str = os.environ.get('ASR_LANGUAGE_HINTS', '')
+            language_hints = []
+            if language_hints_str:
+                # 支持逗号分隔的字符串，如 "zh-CN,en-US,ja-JP"
+                language_hints = [lang.strip() for lang in language_hints_str.split(',') if lang.strip()]
+
+            return {
+                'base_url': base_url,
+                'api_key': api_key,
+                'model': os.environ.get('TRANSCRIPTION_MODEL', 'fun-asr'),
+                'timeout': self._get_asr_timeout(),
+                'diarize': os.environ.get('ASR_DIARIZE', 'true').lower() == 'true',
+                'disfluency_removal_enabled': os.environ.get('ASR_DISFLUENCY_REMOVAL_ENABLED', 'true').lower() == 'true',
+                'timestamp_alignment_enabled': os.environ.get('ASR_TIMESTAMP_ALIGNMENT_ENABLED', 'false').lower() == 'true',
+                'language_hints': language_hints
             }
 
         else:  # openai_whisper (default)

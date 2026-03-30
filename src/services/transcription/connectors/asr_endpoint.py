@@ -162,10 +162,25 @@ class ASREndpointConnector(BaseTranscriptionConnector):
             if request.hotwords:
                 params['hotwords'] = request.hotwords
 
-            content_type = request.mime_type or 'application/octet-stream'
-            files = {
-                'audio_file': (request.filename, request.audio_file, content_type)
-            }
+            # Check if we have file_urls instead of local file
+            files = {}
+            if request.file_urls and len(request.file_urls) > 0:
+                # Use file URLs instead of uploading file
+                params['file_urls'] = request.file_urls
+                logger.info(f"Using file URLs for ASR: {request.file_urls}")
+                logger.info(f"ASR endpoint will use bucket URLs instead of uploading file: {len(request.file_urls)} URLs provided")
+                # We still need to send a dummy file to satisfy the API
+                content_type = request.mime_type or 'application/octet-stream'
+                files = {
+                    'audio_file': (request.filename, request.audio_file, content_type)
+                }
+            else:
+                # Use local file upload
+                logger.info(f"ASR endpoint will upload local file: {request.filename}")
+                content_type = request.mime_type or 'application/octet-stream'
+                files = {
+                    'audio_file': (request.filename, request.audio_file, content_type)
+                }
 
             # Configure timeout: generous values for large file uploads
             # Write timeout needs to be high too - large files take time to upload

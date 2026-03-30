@@ -1681,11 +1681,51 @@ def transcribe_with_connector(app_context, recording_id, filepath, original_file
                     else:
                         # Build the transcription request for single file
                         with open(actual_filepath, 'rb') as audio_file:
+                            # Check if recording has bucket URLs - enhanced monitoring
+                            file_urls = None
+                            bucket_urls_status = "none"
+                            if recording:
+                                if recording.bucket_urls:
+                                    file_urls = recording.bucket_urls
+                                    bucket_urls_status = "available"
+                                    
+                                    # 检查bucket URLs是否过期，如果需要则重新上传
+                                    try:
+                                        # 导入ensure_valid_bucket_urls函数
+                                        from src.api.recordings import ensure_valid_bucket_urls
+                                        success, updated_urls = ensure_valid_bucket_urls(recording)
+                                        if success and updated_urls:
+                                            file_urls = updated_urls
+                                            current_app.logger.info(f"BUCKET_URLS_MONITOR: Recording {recording_id} bucket URLs validated/refreshed, using updated URLs")
+                                        elif not success:
+                                            current_app.logger.warning(f"BUCKET_URLS_MONITOR: Recording {recording_id} bucket URL validation failed, using original URLs")
+                                    except Exception as e:
+                                        current_app.logger.warning(f"BUCKET_URLS_MONITOR: Failed to validate bucket URLs for recording {recording_id}: {e}")
+                                    
+                                    # Enhanced logging for bucket URLs monitoring
+                                    if isinstance(file_urls, list):
+                                        url_count = len(file_urls)
+                                        first_url_preview = file_urls[0][:100] + "..." if len(file_urls[0]) > 100 else file_urls[0]
+                                        current_app.logger.info(f"BUCKET_URLS_MONITOR: Recording {recording_id} has {url_count} bucket URL(s). First URL preview: {first_url_preview}")
+                                        current_app.logger.debug(f"BUCKET_URLS_MONITOR: Full bucket URLs for recording {recording_id}: {file_urls}")
+                                    else:
+                                        current_app.logger.warning(f"BUCKET_URLS_MONITOR: Recording {recording_id} has bucket_urls but it's not a list: {type(file_urls)}")
+                                else:
+                                    bucket_urls_status = "null"
+                                    current_app.logger.info(f"BUCKET_URLS_MONITOR: Recording {recording_id} has no bucket URLs (field is null)")
+                            else:
+                                bucket_urls_status = "no_recording"
+                                current_app.logger.error(f"BUCKET_URLS_MONITOR: Recording {recording_id} not found in database")
+                            
+                            # Log the final decision for monitoring
+                            current_app.logger.info(f"BUCKET_URLS_MONITOR: Recording {recording_id} - Status: {bucket_urls_status}, Using bucket URLs: {file_urls is not None}")
+                            
                             request = TranscriptionRequest(
                                 audio_file=audio_file,
                                 filename=actual_filename,
                                 mime_type=actual_content_type,
                                 language=language,
+                                file_urls=file_urls,
                                 diarize=should_diarize,
                                 min_speakers=min_speakers,
                                 max_speakers=max_speakers,
@@ -1693,7 +1733,7 @@ def transcribe_with_connector(app_context, recording_id, filepath, original_file
                                 hotwords=hotwords,
                             )
 
-                            current_app.logger.info(f"Transcribing with connector: diarize={should_diarize}, language={language}")
+                            current_app.logger.info(f"Transcribing with connector: diarize={should_diarize}, language={language}, file_urls={file_urls is not None}")
                             response = connector.transcribe(request)
 
                         # Store the result

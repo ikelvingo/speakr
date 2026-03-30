@@ -62,6 +62,9 @@ class TranscriptionRequest:
     mime_type: Optional[str] = None
     language: Optional[str] = None
 
+    # File URLs for bucket storage (alternative to local file)
+    file_urls: Optional[List[str]] = None
+
     # Diarization options
     diarize: bool = False
     min_speakers: Optional[int] = None
@@ -77,6 +80,15 @@ class TranscriptionRequest:
 
     # Provider-specific options (passthrough)
     extra_options: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Log file_urls field after initialization."""
+        import logging
+        logger = logging.getLogger(__name__)
+        if self.file_urls:
+            logger.info(f"TranscriptionRequest created with file_urls: {self.file_urls}")
+        else:
+            logger.info(f"TranscriptionRequest created without file_urls (using local file)")
 
 
 @dataclass

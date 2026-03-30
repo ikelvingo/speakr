@@ -88,6 +88,15 @@ SMTP_USE_SSL = os.environ.get('SMTP_USE_SSL', 'false').lower() == 'true'
 SMTP_FROM_ADDRESS = os.environ.get('SMTP_FROM_ADDRESS', 'noreply@yourdomain.com')
 SMTP_FROM_NAME = os.environ.get('SMTP_FROM_NAME', 'Speakr')
 
+# Bucket upload configuration
+ENABLE_UPLOAD_BUCKET = os.environ.get('ENABLE_UPLOAD_BUCKET', 'false').lower() == 'true'
+BUCKET_ACCESS_ID = os.environ.get('BUCKET_ACCESS_ID', '')
+BUCKET_ACCESS_KEY = os.environ.get('BUCKET_ACCESS_KEY', '')
+BUCKET_ENDPOINT = os.environ.get('BUCKET_ENDPOINT', '')
+BUCKET_REGION = os.environ.get('BUCKET_REGION', '')
+BUCKET_NAME = os.environ.get('BUCKET_NAME', '')
+BUCKET_PATH = os.environ.get('BUCKET_PATH', '')
+
 # Create chunking service at module level so it can be imported by processing.py
 # Always initialize the service - the needs_chunking() method will check ENABLE_CHUNKING
 # and return False when appropriate. This allows connectors with hard limits (e.g.,

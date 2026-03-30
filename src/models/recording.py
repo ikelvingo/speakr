@@ -50,6 +50,9 @@ class Recording(db.Model):
     # Speaker embeddings from diarization (JSON dict mapping speaker IDs to 256-dimensional vectors)
     speaker_embeddings = db.Column(db.JSON, nullable=True)
 
+    # Bucket storage URLs (JSON list of URLs when file is stored in S3-compatible bucket)
+    bucket_urls = db.Column(db.JSON, nullable=True)
+
     # Folder relationship (one-to-many: a recording belongs to at most one folder)
     folder_id = db.Column(db.Integer, db.ForeignKey('folder.id', ondelete='SET NULL'), nullable=True, index=True)
 
@@ -287,7 +290,8 @@ class Recording(db.Model):
             'events': [event.to_dict() for event in self.events] if self.events else [],
             'duplicate_info': self.get_duplicate_info(),
             'shared_with_count': shared_with_count,
-            'public_share_count': public_share_count
+            'public_share_count': public_share_count,
+            'bucket_urls': self.bucket_urls
         }
 
         # Only compute expensive HTML conversions when explicitly requested

@@ -22,7 +22,7 @@ from email.utils import encode_rfc2231
 from src.database import db
 from src.models import *
 from src.utils import *
-from src.config.app_config import ASR_MIN_SPEAKERS, ASR_MAX_SPEAKERS, ASR_DIARIZE, USE_NEW_TRANSCRIPTION_ARCHITECTURE
+from src.config.app_config import ASR_MIN_SPEAKERS, ASR_MAX_SPEAKERS, ASR_DIARIZE, USE_NEW_TRANSCRIPTION_ARCHITECTURE, ENABLE_UPLOAD_BUCKET, BUCKET_ACCESS_ID, BUCKET_ACCESS_KEY, BUCKET_ENDPOINT, BUCKET_REGION, BUCKET_NAME, BUCKET_PATH
 from src.tasks.processing import format_transcription_for_llm
 from src.utils.ffmpeg_utils import FFmpegError, FFmpegNotFoundError
 from src.services.speaker import update_speaker_usage, identify_unidentified_speakers_from_text
@@ -53,6 +53,9 @@ VIDEO_PASSTHROUGH_ASR = os.environ.get('VIDEO_PASSTHROUGH_ASR', 'false').lower()
 USE_ASR_ENDPOINT = os.environ.get('USE_ASR_ENDPOINT', 'false').lower() == 'true'
 ENABLE_CHUNKING = os.environ.get('ENABLE_CHUNKING', 'true').lower() == 'true'
 
+# Bucket URL expiration time in hours (七牛云预签名URL有效期为24小时)
+BUCKET_URL_EXPIRY_HOURS = 24
+
 # Global helpers (will be injected from app)
 has_recording_access = None
 get_user_recording_status = None
@@ -62,6 +65,120 @@ bcrypt = None
 csrf = None
 limiter = None
 chunking_service = None
+
+def ensure_valid_bucket_urls(recording):
+    """
+    确保录音的bucket URLs有效，如果过期则重新上传文件。
+    
+    参数:
+        recording: Recording对象
+        
+    返回:
+        tuple: (bool, list) - (是否成功, 更新后的bucket URLs列表)
+    """
+    if not recording.bucket_urls or not ENABLE_UPLOAD_BUCKET:
+        return True, recording.bucket_urls or []
+    
+    try:
+        import boto3
+        from botocore.client import Config
+        from datetime import datetime, timedelta
+        import re
+        
+        # 解析bucket URLs
+        bucket_urls = recording.bucket_urls
+        if isinstance(bucket_urls, str):
+            try:
+                bucket_urls = json.loads(bucket_urls)
+            except json.JSONDecodeError:
+                bucket_urls = [bucket_urls]
+        
+        if not isinstance(bucket_urls, list):
+            bucket_urls = []
+        
+        # 检查是否有有效的音频文件路径
+        if not recording.audio_path or not os.path.exists(recording.audio_path):
+            current_app.logger.warning(f"Audio file not found for recording {recording.id}, cannot re-upload to bucket")
+            return False, bucket_urls
+        
+        # 检查URL是否过期
+        needs_reupload = False
+        for url in bucket_urls:
+            if not url:
+                continue
+            
+            # 检查URL是否包含过期时间戳（预签名URL）
+            if 'Expires=' in url:
+                try:
+                    # 从URL中提取过期时间戳
+                    match = re.search(r'Expires=(\d+)', url)
+                    if match:
+                        expires_timestamp = int(match.group(1))
+                        expires_time = datetime.fromtimestamp(expires_timestamp)
+                        
+                        # 检查是否在过期前24小时内（七牛云预签名URL有效期为24小时）
+                        if expires_time < datetime.now() + timedelta(hours=24):
+                            current_app.logger.info(f"Bucket URL for recording {recording.id} will expire soon or has expired: {expires_time}")
+                            needs_reupload = True
+                            break
+                except Exception as e:
+                    current_app.logger.warning(f"Failed to parse expiration from bucket URL: {e}")
+        
+        # 如果需要重新上传
+        if needs_reupload:
+            current_app.logger.info(f"Re-uploading audio file for recording {recording.id} to bucket")
+            
+            # 创建S3客户端
+            s3_client = boto3.client(
+                's3',
+                endpoint_url=BUCKET_ENDPOINT,
+                aws_access_key_id=BUCKET_ACCESS_ID,
+                aws_secret_access_key=BUCKET_ACCESS_KEY,
+                region_name=BUCKET_REGION if BUCKET_REGION else None,
+                config=Config(signature_version='s3v4')
+            )
+            
+            # 生成新的对象key
+            timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+            safe_filename = secure_filename(recording.original_filename or f"recording_{recording.id}")
+            
+            # 清理BUCKET_PATH
+            if BUCKET_PATH:
+                clean_path = BUCKET_PATH.strip('/')
+                object_key = f"{clean_path}/{timestamp}_{safe_filename}" if clean_path else f"{timestamp}_{safe_filename}"
+            else:
+                object_key = f"{timestamp}_{safe_filename}"
+            
+            # 上传文件到bucket
+            s3_client.upload_file(
+                recording.audio_path,
+                BUCKET_NAME,
+                object_key,
+                ExtraArgs={'ContentType': recording.mime_type or 'application/octet-stream'}
+            )
+            
+            # 生成新的预签名URL
+            new_bucket_url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': BUCKET_NAME,
+                    'Key': object_key
+                },
+                ExpiresIn=3600  # 1小时有效期
+            )
+            
+            # 更新录音的bucket URLs
+            recording.bucket_urls = [new_bucket_url]
+            db.session.commit()
+            
+            current_app.logger.info(f"Successfully re-uploaded recording {recording.id} to bucket with new URL")
+            return True, [new_bucket_url]
+        
+        return True, bucket_urls
+        
+    except Exception as e:
+        current_app.logger.error(f"Error ensuring valid bucket URLs for recording {recording.id}: {e}", exc_info=True)
+        return False, recording.bucket_urls or []
 
 def init_recordings_helpers(**kwargs):
     """Initialize helper functions and extensions from app."""
@@ -1974,6 +2091,80 @@ def upload_file():
         file.save(filepath)
         current_app.logger.info(f"File saved to {filepath}")
 
+        # Bucket upload logic
+        bucket_urls = []
+        if ENABLE_UPLOAD_BUCKET and BUCKET_ACCESS_ID and BUCKET_ACCESS_KEY and BUCKET_ENDPOINT and BUCKET_NAME:
+            try:
+                current_app.logger.info(f"Attempting to upload file to bucket: {BUCKET_NAME}")
+                current_app.logger.info(f"Bucket configuration: endpoint={BUCKET_ENDPOINT}, region={BUCKET_REGION}, path={BUCKET_PATH}")
+                
+                # Import boto3 for S3-compatible storage
+                import boto3
+                from botocore.client import Config
+                
+                # Create S3 client with custom endpoint
+                s3_client = boto3.client(
+                    's3',
+                    endpoint_url=BUCKET_ENDPOINT,
+                    aws_access_key_id=BUCKET_ACCESS_ID,
+                    aws_secret_access_key=BUCKET_ACCESS_KEY,
+                    region_name=BUCKET_REGION if BUCKET_REGION else None,
+                    config=Config(signature_version='s3v4')
+                )
+                
+                # Generate object key with path
+                timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+                # Clean up BUCKET_PATH to avoid double slashes
+                if BUCKET_PATH:
+                    # Remove leading/trailing slashes
+                    clean_path = BUCKET_PATH.strip('/')
+                    object_key = f"{clean_path}/{timestamp}_{safe_filename}" if clean_path else f"{timestamp}_{safe_filename}"
+                else:
+                    object_key = f"{timestamp}_{safe_filename}"
+                current_app.logger.info(f"Generated object key: {object_key}")
+                
+                # Upload file to bucket
+                current_app.logger.info(f"Starting bucket upload: {filepath} -> {BUCKET_NAME}/{object_key}")
+                s3_client.upload_file(
+                    filepath,
+                    BUCKET_NAME,
+                    object_key,
+                    ExtraArgs={'ContentType': mimetypes.guess_type(filepath)[0] or 'application/octet-stream'}
+                )
+                
+                # Generate presigned URL for the uploaded file (expires in 1 hour)
+                try:
+                    bucket_url = s3_client.generate_presigned_url(
+                        'get_object',
+                        Params={
+                            'Bucket': BUCKET_NAME,
+                            'Key': object_key
+                        },
+                        ExpiresIn=3600  # 1 hour expiration
+                    )
+                    current_app.logger.info(f"Generated presigned URL for bucket file: {bucket_url}")
+                except Exception as presign_error:
+                    current_app.logger.error(f"Failed to generate presigned URL: {presign_error}")
+                    # Fallback to regular URL if presigned URL generation fails
+                    bucket_url = f"{BUCKET_ENDPOINT}/{BUCKET_NAME}/{object_key}"
+                    current_app.logger.warning(f"Using regular URL as fallback: {bucket_url}")
+                
+                bucket_urls.append(bucket_url)
+                
+                current_app.logger.info(f"File uploaded to bucket successfully: {bucket_url}")
+                current_app.logger.info(f"Bucket URLs list: {bucket_urls}")
+                
+                # Optionally delete local file after successful bucket upload
+                # os.remove(filepath)
+                # current_app.logger.info(f"Local file deleted after bucket upload: {filepath}")
+                
+            except Exception as e:
+                current_app.logger.error(f"Failed to upload file to bucket: {e}", exc_info=True)
+                # Continue with local file processing if bucket upload fails
+                if not ENABLE_UPLOAD_BUCKET:
+                    # If bucket upload is mandatory, return error
+                    return jsonify({'error': f'Bucket upload failed: {str(e)}'}), 500
+
         # Compute file hash on the ORIGINAL upload before any conversion/compression.
         # Lossy re-encoding (e.g. FLAC→MP3) produces different bytes each run,
         # so hashing after conversion would miss duplicates.
@@ -2240,7 +2431,8 @@ def upload_file():
             notes=notes,
             folder_id=selected_folder.id if selected_folder else None,
             processing_source='upload',  # Track that this was manually uploaded
-            file_hash=file_hash
+            file_hash=file_hash,
+            bucket_urls=bucket_urls if bucket_urls else None
         )
         db.session.add(recording)
         db.session.commit()
