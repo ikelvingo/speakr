@@ -1,3 +1,73 @@
+## HOW TO GET MY EDITION:
+```bash
+docker pull ikelvingo/speakr:cse
+```
+## HOT TO ADD ALI Fun-ASR/Paraformer:
+Modify your docker compose Environment.
+```yaml
+# DashScope ASR Service Configuration
+# ===================================
+
+# API Endpoint Configuration
+ASR_BASE_URL=https://dashscope.aliyuncs.com/api/v1
+
+# Authentication & API Key
+TRANSCRIPTION_API_KEY=sk-YOUR_ALIYUN_API_KEY  # Replace with your actual API key from Aliyun Console
+
+# ASR Model Selection
+# Supported models: 'fun-asr' or 'paraformer-v2'
+# Recommendation: paraformer-v2 (cost-effective with comparable accuracy)
+TRANSCRIPTION_MODEL=  # Uncomment and specify your preferred model
+
+# Bucket Configuration (Support Any S3 bucket services)
+ENABLE_UPLOAD_BUCKET=true  # Enable/disable bucket upload feature
+
+# OSS Bucket Credentials (Required when ENABLE_UPLOAD_BUCKET=true)
+BUCKET_ACCESS_ID=        # Your AccessKey ID
+BUCKET_ACCESS_KEY=       # Your AccessKey Secret
+BUCKET_ENDPOINT=         # Bucket endpoint (e.g., oss-cn-hangzhou.aliyuncs.com)
+BUCKET_REGION=           # Bucket region (e.g., cn-hangzhou)
+BUCKET_NAME=             # Bucket bucket name
+BUCKET_PATH=             # Storage path prefix (without leading '/')
+```
+## Logic Flowchat:
+```mermaid
+  graph TD
+      A[Start Transcription Request] --> B{ENABLE_UPLOAD_BUCKET?}
+      
+      B -->|true| C[Enable Object Storage Upload]
+      B -->|false| D[Disable Object Storage Upload]
+      
+      C --> E[Upload File to Object Storage]
+      E --> F[Generate Pre-signed URL]
+      F --> G[Use Aliyun FunASR Connector]
+      G --> H[Send JSON Request<br/>containing file URL]
+      H --> I[Aliyun FunASR Processing]
+      I --> J[Return Transcription Result]
+      
+      D --> K{Check File URL?}
+      K -->|File URL available| L[Use existing file URL]
+      K -->|No file URL| M[Attempt other connectors]
+      
+      L --> G
+      
+      M --> N{Auto-detect Connector}
+      N --> O[ASR Endpoint Connector]
+      N --> P[OpenAI Whisper Connector]
+      N --> Q[Other Connectors]
+      
+      O --> R[Send multipart/form-data request]
+      P --> R
+      Q --> R
+      
+      R --> S[Return Transcription Result]
+      
+      J --> T[End]
+      S --> T
+```
+
+
+
 <div align="center">
     <img src="static/img/icon-32x32.png" alt="Speakr Logo" width="32"/>
 </div>
