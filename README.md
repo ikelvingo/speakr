@@ -32,12 +32,12 @@ FUNASR_MODEL=paraformer-v2  # Uncomment and specify your preferred model
 ENABLE_UPLOAD_BUCKET=true  # Enable/disable bucket upload feature
 
 # OSS Bucket Credentials (Required when ENABLE_UPLOAD_BUCKET=true)
-BUCKET_ACCESS_ID=        # Your AccessKey ID
-BUCKET_ACCESS_KEY=       # Your AccessKey Secret
+BUCKET_ACCESS_ID=        # Your Bucket AccessKey ID
+BUCKET_ACCESS_KEY=       # Your Bucket AccessKey Secret
 BUCKET_ENDPOINT=         # Bucket endpoint (e.g., oss-cn-hangzhou.aliyuncs.com)
-BUCKET_REGION=           # Bucket region (e.g., cn-hangzhou)
-BUCKET_NAME=             # Bucket bucket name
-BUCKET_PATH=             # Storage path prefix (without leading '/')
+BUCKET_REGION=           # Your Bucket region (e.g., cn-hangzhou)
+BUCKET_NAME=             # Your Bucket bucket name
+BUCKET_PATH=             # Your Bucket storage path prefix (without leading '/')
 ```
 ### When Fun-ASR recognition fails, the system will automatically fall back to the default connector for processing.
 
