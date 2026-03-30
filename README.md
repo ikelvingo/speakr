@@ -1,3 +1,12 @@
+# Why should I create this version of Speakr?
+| Model | Prices(per second) | Support Timeline | Support Diarization |
+| :---: | :----: | :----: | :----: |
+|  gpt-4o-transcribe-diarize     |    $0.0003    | ✅ | ✅ |
+|    fun-asr   |    $0.00003183    | ✅ | ✅ |
+|    paraformer-v2   |    $0.00001158    | ✅ | ✅ |
+
+Thanks to all Chinese AI companies for your efforts!
+
 ## HOW TO GET MY EDITION:
 ```bash
 docker pull ikelvingo/speakr:cse
