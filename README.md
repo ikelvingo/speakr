@@ -1,9 +1,9 @@
 # Why should I create this version of Speakr?
-| Model | Prices(per second) | Support Timeline | Support Diarization |
-| :---: | :----: | :----: | :----: |
-|  gpt-4o-transcribe-diarize     |    $0.0003    | ✅ | ✅ |
-|    fun-asr   |    $0.00003183    | ✅ | ✅ |
-|    paraformer-v2   |    $0.00001158    | ✅ | ✅ |
+|           Model           | Prices(per second) | Support Timeline | Support Diarization |
+| :-----------------------: | :----------------: | :--------------: | :-----------------: |
+| gpt-4o-transcribe-diarize |      $0.0003       |        ✅         |          ✅          |
+|          fun-asr          |    $0.00003183     |        ✅         |          ✅          |
+|       paraformer-v2       |    $0.00001158     |        ✅         |          ✅          |
 
 Thanks to all Chinese AI companies for your efforts!
 
@@ -13,6 +13,11 @@ docker pull ikelvingo/speakr:cse
 ```
 ## HOT TO ADD ALI Fun-ASR/Paraformer:
 Modify your docker compose Environment.
+
+> [!IMPORTANT]
+>
+> ALI Fun-ASR doesn't accept raw audio files directly. You'll need to host them on S3 first, then pass the URLs.
+
 ```yaml
 # DashScope ASR Service Configuration
 # ===================================
@@ -151,17 +156,17 @@ Speakr transforms your audio recordings into organized, searchable, and intellig
 
 Different people use Speakr's collaboration and retention features in different ways:
 
-| Use Case | Setup | What It Does |
-|----------|-------|-------------|
-| **Family memories** | Create "Family" group with protected tag | Everyone gets access to trips and events automatically, recordings preserved forever |
-| **Book club discussions** | "Book Club" group, tag monthly meetings | All members auto-share discussions, can add personal notes about what resonated |
-| **Work project group** | Share individually with 3 teammates | Temporary collaboration, easy to revoke when project ends |
-| **Daily group standups** | Group tag with 14-day retention | Auto-share with group, auto-cleanup of routine meetings |
+| Use Case                   | Setup                                          | What It Does                                                 |
+| -------------------------- | ---------------------------------------------- | ------------------------------------------------------------ |
+| **Family memories**        | Create "Family" group with protected tag       | Everyone gets access to trips and events automatically, recordings preserved forever |
+| **Book club discussions**  | "Book Club" group, tag monthly meetings        | All members auto-share discussions, can add personal notes about what resonated |
+| **Work project group**     | Share individually with 3 teammates            | Temporary collaboration, easy to revoke when project ends    |
+| **Daily group standups**   | Group tag with 14-day retention                | Auto-share with group, auto-cleanup of routine meetings      |
 | **Architecture decisions** | Engineering group tag, protected from deletion | Technical discussions automatically shared, preserved permanently as reference |
-| **Client consultations** | Individual share with view-only permission | Controlled external access, clients can't accidentally edit |
-| **Research interviews** | Protected tag + Obsidian export | Preserve recordings indefinitely, transcripts auto-import to note-taking system |
-| **Legal consultations** | Group tag with 7-year retention | Automatic sharing with legal group, compliance-based retention |
-| **Sales calls** | Group tag with 1-year retention | Whole sales group learns from each call, cleanup after sales cycle |
+| **Client consultations**   | Individual share with view-only permission     | Controlled external access, clients can't accidentally edit  |
+| **Research interviews**    | Protected tag + Obsidian export                | Preserve recordings indefinitely, transcripts auto-import to note-taking system |
+| **Legal consultations**    | Group tag with 7-year retention                | Automatic sharing with legal group, compliance-based retention |
+| **Sales calls**            | Group tag with 1-year retention                | Whole sales group learns from each call, cleanup after sales cycle |
 
 ### Creative Tag Prompt Examples
 
@@ -219,13 +224,13 @@ docker compose up -d
 
 Speakr uses a **connector-based architecture** that auto-detects your transcription provider:
 
-| Option | Setup | Speaker Diarization | Voice Profiles |
-|--------|-------|---------------------|----------------|
-| **OpenAI Transcribe** | Just API key | ✅ `gpt-4o-transcribe-diarize` | ❌ |
-| **WhisperX ASR** | GPU container | ✅ Best quality | ✅ |
-| **Mistral Voxtral** | Just API key | ✅ Built-in | ❌ |
-| **VibeVoice ASR** | Self-hosted (vLLM) | ✅ Built-in | ❌ |
-| **Legacy Whisper** | Just API key | ❌ | ❌ |
+| Option                | Setup              | Speaker Diarization           | Voice Profiles |
+| --------------------- | ------------------ | ----------------------------- | -------------- |
+| **OpenAI Transcribe** | Just API key       | ✅ `gpt-4o-transcribe-diarize` | ❌              |
+| **WhisperX ASR**      | GPU container      | ✅ Best quality                | ✅              |
+| **Mistral Voxtral**   | Just API key       | ✅ Built-in                    | ❌              |
+| **VibeVoice ASR**     | Self-hosted (vLLM) | ✅ Built-in                    | ❌              |
+| **Legacy Whisper**    | Just API key       | ❌                             | ❌              |
 
 **Simplest setup (OpenAI with diarization):**
 ```bash
