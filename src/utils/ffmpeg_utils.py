@@ -415,14 +415,24 @@ def temp_audio_conversion(input_path: str, target_format: str = 'mp3'):
                 current_app.logger.warning(f"Failed to cleanup temp file {temp_path}: {e}")
 
 
+def _decode_ffmpeg_output(data: bytes) -> str:
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError:
+        try:
+            return data.decode('gbk')
+        except UnicodeDecodeError:
+            return data.decode('utf-8', errors='replace')
+
+
 def _run_ffmpeg_command(cmd: list, operation_description: str) -> None:
     """
     Execute FFmpeg command with consistent error handling.
-    
+
     Args:
         cmd: FFmpeg command as list of strings
         operation_description: Human-readable description for error messages
-        
+
     Raises:
         FFmpegNotFoundError: If FFmpeg is not installed
         FFmpegError: If FFmpeg command fails
@@ -433,16 +443,16 @@ def _run_ffmpeg_command(cmd: list, operation_description: str) -> None:
             cmd,
             check=True,
             capture_output=True,
-            text=True
         )
         current_app.logger.debug(f"FFmpeg {operation_description} completed successfully")
-        
+
     except FileNotFoundError:
         error_msg = "FFmpeg not found. Please ensure FFmpeg is installed and in the system's PATH."
         current_app.logger.error(error_msg)
         raise FFmpegNotFoundError(error_msg)
-        
+
     except subprocess.CalledProcessError as e:
-        error_msg = f"{operation_description} failed: {e.stderr}"
+        stderr_text = _decode_ffmpeg_output(e.stderr)
+        error_msg = f"{operation_description} failed: {stderr_text}"
         current_app.logger.error(f"FFmpeg error: {error_msg}")
         raise FFmpegError(error_msg)
